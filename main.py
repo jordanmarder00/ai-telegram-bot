@@ -39,22 +39,29 @@ def send_message(chat_id, text, buttons=None):
 
 def get_ai_news():
     url = (
-        f"https://newsapi.org/v2/everything?"
-        f"q=AI OR robotics OR humanoid robot OR artificial intelligence "
-        f"OR China AI&"
-        f"sortBy=publishedAt&language=en&pageSize=5&"
+        f"https://newsapi.org/v2/top-headlines?"
+        f"category=technology&"
+        f"language=en&"
+        f"pageSize=5&"
         f"apiKey={NEWS_API_KEY}"
     )
 
+    print("NEWS URL:", url)
+
     r = requests.get(url)
+    print("NEWS STATUS:", r.status_code)
+    print("NEWS RESPONSE:", r.text)
+
     data = r.json()
 
     articles = []
 
-    for article in data.get("articles", [])[:5]:
-        title = article["title"]
-        link = article["url"]
-        articles.append((title, link))
+    for article in data.get("articles", []):
+        title = article.get("title")
+        link = article.get("url")
+
+        if title and link:
+            articles.append((title, link))
 
     return articles
 
@@ -125,3 +132,4 @@ def webhook():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000)
+
