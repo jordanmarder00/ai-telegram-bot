@@ -4,6 +4,7 @@ import requests
 import feedparser
 from flask import Flask, request
 from openai import OpenAI
+from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 
@@ -34,17 +35,31 @@ def send_message(chat_id, text, buttons=None):
         }
 
     r = requests.post(f"{BASE_URL}/sendMessage", json=payload)
-    print("TELEGRAM:", r.status_code, r.text)
+    print("TELEGRAM:", r.status_code)
 
 
 # ========================
-# FETCH ARTICLE TEXT
+# CLEAN ARTICLE EXTRACTION
 # ========================
 
 def fetch_article_text(url):
     try:
-        r = requests.get(url, timeout=10)
-        return r.text[:8000]
+        headers = {
+            "User-Agent": "Mozilla/5.0"
+        }
+
+        r = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        paragraphs = soup.find_all("p")
+
+        article_text = " ".join([p.get_text() for p in paragraphs])
+
+        if len(article_text) < 500:
+            return None
+
+        return article_text[:6000]
+
     except:
         return None
 
@@ -55,16 +70,17 @@ def fetch_article_text(url):
 
 def summarize_and_detect(url):
     article_text = fetch_article_text(url)
+
     if not article_text:
-        return "Could not retrieve article content.", []
+        return "⚠️ Could not extract readable article content.", []
 
     prompt = f"""
-Summarize this article in 5 concise bullet points.
+Summarize this news article in 5 concise bullet points.
 
-Then list any publicly traded companies mentioned
-with their stock ticker symbols.
+Then list publicly traded companies mentioned,
+with their stock ticker symbols ONLY.
 
-Format exactly like this:
+Format exactly:
 
 SUMMARY:
 - bullet
@@ -83,7 +99,7 @@ Article:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.3
+            temperature=0.2
         )
 
         output = response.choices[0].message.content
@@ -93,13 +109,13 @@ Article:
             tickers = [
                 line.strip()
                 for line in companies_part.strip().split("\n")
-                if line.strip()
+                if line.strip() and line.strip().isupper()
             ]
         else:
             summary_part = output
             tickers = []
 
-        return summary_part.strip(), tickers
+        return summary_part.strip(), tickers[:3]
 
     except Exception as e:
         print("OPENAI ERROR:", e)
@@ -116,7 +132,7 @@ def get_stock_info(symbol):
         r = requests.get(url)
         data = r.json()
 
-        if "c" not in data:
+        if not data or "c" not in data:
             return "Stock data unavailable."
 
         return (
@@ -141,7 +157,7 @@ def get_ai_news():
 
     articles = []
 
-    for entry in feed.entries[:5]:
+    for entry in feed.entries[:7]:
         articles.append((entry.title, entry.link))
 
     return articles
@@ -169,7 +185,6 @@ def webhook():
             json={"callback_query_id": callback["id"]}
         )
 
-        # SUMMARY BUTTON
         if callback_data.startswith("summarize_"):
             article_id = int(callback_data.split("_")[1])
             link = latest_articles.get(article_id)
@@ -181,19 +196,18 @@ def webhook():
                 buttons = []
 
                 if tickers:
-                    stock_buttons = []
-                    for ticker in tickers[:3]:  # limit to 3
-                        stock_buttons.append({
+                    row = []
+                    for ticker in tickers:
+                        row.append({
                             "text": f"📈 {ticker}",
                             "callback_data": f"stock_{ticker}"
                         })
-                    buttons.append(stock_buttons)
+                    buttons.append(row)
 
                 send_message(chat_id, summary, buttons)
             else:
                 send_message(chat_id, "Article not found.")
 
-        # STOCK BUTTON
         elif callback_data.startswith("stock_"):
             ticker = callback_data.split("_")[1]
             stock_info = get_stock_info(ticker)
@@ -207,13 +221,12 @@ def webhook():
         text = data["message"].get("text", "")
 
         if text == "/start":
-            send_message(chat_id, "🤖 AI & Robotics Investment Bot Active.")
+            send_message(chat_id, "🤖 AI Investment Bot Active.\n\nCommands:\n/news\n/refresh")
 
         elif text == "/news":
             send_message(chat_id, "Fetching AI & robotics news...")
-
-            articles = get_ai_news()
             latest_articles.clear()
+            articles = get_ai_news()
 
             for i, (title, link) in enumerate(articles):
                 latest_articles[i] = link
@@ -221,16 +234,30 @@ def webhook():
                 send_message(
                     chat_id,
                     f"📰 {title}\n{link}",
-                    buttons=[
-                        [
-                            {
-                                "text": "🧠 Summarize",
-                                "callback_data": f"summarize_{i}"
-                            }
-                        ]
-                    ]
+                    buttons=[[{
+                        "text": "🧠 Summarize",
+                        "callback_data": f"summarize_{i}"
+                    }]]
                 )
-                time.sleep(0.6)
+                time.sleep(0.5)
+
+        elif text == "/refresh":
+            send_message(chat_id, "🔄 Refreshing news feed...")
+            latest_articles.clear()
+            articles = get_ai_news()
+
+            for i, (title, link) in enumerate(articles):
+                latest_articles[i] = link
+
+                send_message(
+                    chat_id,
+                    f"📰 {title}\n{link}",
+                    buttons=[[{
+                        "text": "🧠 Summarize",
+                        "callback_data": f"summarize_{i}"
+                    }]]
+                )
+                time.sleep(0.5)
 
     return {"ok": True}
 
