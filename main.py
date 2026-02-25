@@ -42,7 +42,7 @@ def get_ai_news():
         f"https://newsapi.org/v2/top-headlines?"
         f"category=technology&"
         f"language=en&"
-        f"pageSize=15&"
+        f"pageSize=20&"
         f"apiKey={NEWS_API_KEY}"
     )
 
@@ -64,17 +64,26 @@ def get_ai_news():
         "semiconductor"
     ]
 
-    articles = []
+    filtered = []
+    fallback = []
 
     for article in data.get("articles", []):
-        title = article.get("title", "").lower()
-        link = article.get("url")
+        title = article.get("title", "")
+        link = article.get("url", "")
 
-        if any(keyword in title for keyword in keywords):
-            articles.append((article["title"], link))
+        if not title or not link:
+            continue
 
-    return articles[:5]
+        fallback.append((title, link))
 
+        if any(keyword in title.lower() for keyword in keywords):
+            filtered.append((title, link))
+
+    if filtered:
+        return filtered[:5]
+
+    # If no AI found, send tech instead
+    return fallback[:5]
 
 # ========================
 # WEBHOOK
@@ -142,5 +151,6 @@ def webhook():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000)
+
 
 
