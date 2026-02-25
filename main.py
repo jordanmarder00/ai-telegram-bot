@@ -1,5 +1,6 @@
 import os
 import time
+import random
 import requests
 import feedparser
 from flask import Flask, request
@@ -18,10 +19,9 @@ BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 latest_articles = {}
 
-# ========================
+# =========================
 # SEND MESSAGE
-# ========================
-
+# =========================
 def send_message(chat_id, text, buttons=None):
     payload = {
         "chat_id": chat_id,
@@ -35,22 +35,18 @@ def send_message(chat_id, text, buttons=None):
         }
 
     r = requests.post(f"{BASE_URL}/sendMessage", json=payload)
-    print("TELEGRAM:", r.status_code)
+    print("TELEGRAM:", r.status_code, r.text)
 
 
-# ========================
-# CLEAN ARTICLE EXTRACTION
-# ========================
-
+# =========================
+# FETCH CLEAN ARTICLE TEXT
+# =========================
 def fetch_article_text(url):
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0"
-        }
-
+        headers = {"User-Agent": "Mozilla/5.0"}
         r = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(r.text, "html.parser")
 
+        soup = BeautifulSoup(r.text, "html.parser")
         paragraphs = soup.find_all("p")
 
         article_text = " ".join([p.get_text() for p in paragraphs])
@@ -60,14 +56,14 @@ def fetch_article_text(url):
 
         return article_text[:6000]
 
-    except:
+    except Exception as e:
+        print("ARTICLE FETCH ERROR:", e)
         return None
 
 
-# ========================
-# OPENAI SUMMARY + COMPANY DETECTION
-# ========================
-
+# =========================
+# SUMMARIZE + DETECT COMPANIES
+# =========================
 def summarize_and_detect(url):
     article_text = fetch_article_text(url)
 
@@ -77,7 +73,7 @@ def summarize_and_detect(url):
     prompt = f"""
 Summarize this news article in 5 concise bullet points.
 
-Then list publicly traded companies mentioned,
+Then list publicly traded companies mentioned
 with their stock ticker symbols ONLY.
 
 Format exactly:
@@ -109,7 +105,7 @@ Article:
             tickers = [
                 line.strip()
                 for line in companies_part.strip().split("\n")
-                if line.strip() and line.strip().isupper()
+                if line.strip().isupper()
             ]
         else:
             summary_part = output
@@ -122,10 +118,9 @@ Article:
         return "⚠️ Summary unavailable.", []
 
 
-# ========================
+# =========================
 # STOCK INFO
-# ========================
-
+# =========================
 def get_stock_info(symbol):
     try:
         url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={FINNHUB_KEY}"
@@ -143,33 +138,32 @@ def get_stock_info(symbol):
             f"Prev Close: ${data['pc']}"
         )
 
-    except:
+    except Exception as e:
+        print("FINNHUB ERROR:", e)
         return "⚠️ Stock info unavailable."
 
 
-# ========================
+# =========================
 # GET AI NEWS
-# ========================
-
+# =========================
 def get_ai_news():
-    timestamp = int(time.time())
-
-    rss_url = f"https://news.google.com/rss/search?q=AI+robotics+China+humanoid+robots+{timestamp}&hl=en-US&gl=US&ceid=US:en"
+    rss_url = "https://news.google.com/rss/search?q=AI+robotics+China+humanoid+robots&hl=en-US&gl=US&ceid=US:en"
 
     feed = feedparser.parse(rss_url)
 
     articles = []
 
-    for entry in feed.entries[:7]:
+    for entry in feed.entries:
         articles.append((entry.title, entry.link))
 
-    return articles
+    random.shuffle(articles)
+
+    return articles[:7]
 
 
-# ========================
+# =========================
 # WEBHOOK
-# ========================
-
+# =========================
 @app.route(f"/bot{TELEGRAM_TOKEN}", methods=["POST"])
 def webhook():
     data = request.json
@@ -177,7 +171,9 @@ def webhook():
     if not data:
         return {"ok": True}
 
-    # BUTTON CLICK
+    # -------------------------
+    # BUTTON CLICK HANDLER
+    # -------------------------
     if "callback_query" in data:
         callback = data["callback_query"]
         chat_id = callback["message"]["chat"]["id"]
@@ -188,6 +184,7 @@ def webhook():
             json={"callback_query_id": callback["id"]}
         )
 
+        # SUMMARY BUTTON
         if callback_data.startswith("summarize_"):
             article_id = int(callback_data.split("_")[1])
             link = latest_articles.get(article_id)
@@ -197,7 +194,6 @@ def webhook():
                 summary, tickers = summarize_and_detect(link)
 
                 buttons = []
-
                 if tickers:
                     row = []
                     for ticker in tickers:
@@ -211,6 +207,7 @@ def webhook():
             else:
                 send_message(chat_id, "Article not found.")
 
+        # STOCK BUTTON
         elif callback_data.startswith("stock_"):
             ticker = callback_data.split("_")[1]
             stock_info = get_stock_info(ticker)
@@ -218,18 +215,28 @@ def webhook():
 
         return {"ok": True}
 
-    # NORMAL MESSAGE
+    # -------------------------
+    # MESSAGE HANDLER
+    # -------------------------
     if "message" in data:
         chat_id = data["message"]["chat"]["id"]
         text = data["message"].get("text", "")
 
         if text == "/start":
-            send_message(chat_id, "🤖 AI Investment Bot Active.\n\nCommands:\n/news\n/refresh")
+            send_message(
+                chat_id,
+                "🤖 AI Investment Bot Active.\n\nCommands:\n/news\n/refresh"
+            )
 
-        elif text == "/news":
+        elif text == "/news" or text == "/refresh":
             send_message(chat_id, "Fetching AI & robotics news...")
+
             latest_articles.clear()
             articles = get_ai_news()
+
+            if not articles:
+                send_message(chat_id, "⚠️ No news articles found.")
+                return {"ok": True}
 
             for i, (title, link) in enumerate(articles):
                 latest_articles[i] = link
@@ -242,29 +249,7 @@ def webhook():
                         "callback_data": f"summarize_{i}"
                     }]]
                 )
-                time.sleep(0.5)
 
-        elif text == "/refresh":
-            send_message(chat_id, "🔄 Refreshing news feed...")
-            latest_articles.clear()
-            articles = get_ai_news()
-
-            for i, (title, link) in enumerate(articles):
-                latest_articles[i] = link
-
-                send_message(
-                    chat_id,
-                    f"📰 {title}\n{link}",
-                    buttons=[[{
-                        "text": "🧠 Summarize",
-                        "callback_data": f"summarize_{i}"
-                    }]]
-                )
                 time.sleep(0.5)
 
     return {"ok": True}
-
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8000)
-
