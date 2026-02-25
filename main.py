@@ -42,28 +42,38 @@ def get_ai_news():
         f"https://newsapi.org/v2/top-headlines?"
         f"category=technology&"
         f"language=en&"
-        f"pageSize=5&"
+        f"pageSize=15&"
         f"apiKey={NEWS_API_KEY}"
     )
 
-    print("NEWS URL:", url)
-
     r = requests.get(url)
-    print("NEWS STATUS:", r.status_code)
-    print("NEWS RESPONSE:", r.text)
-
     data = r.json()
+
+    keywords = [
+        "ai",
+        "artificial intelligence",
+        "robot",
+        "robotics",
+        "humanoid",
+        "china",
+        "autonomous",
+        "machine learning",
+        "nvidia",
+        "tesla",
+        "openai",
+        "semiconductor"
+    ]
 
     articles = []
 
     for article in data.get("articles", []):
-        title = article.get("title")
+        title = article.get("title", "").lower()
         link = article.get("url")
 
-        if title and link:
-            articles.append((title, link))
+        if any(keyword in title for keyword in keywords):
+            articles.append((article["title"], link))
 
-    return articles
+    return articles[:5]
 
 
 # ========================
@@ -132,4 +142,5 @@ def webhook():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000)
+
 
