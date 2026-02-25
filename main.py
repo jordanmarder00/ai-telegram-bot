@@ -101,7 +101,7 @@ Previous Close: ${prev_close}
 # HANDLE TELEGRAM WEBHOOK
 # ========================
 
-@app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
+@app.route(f"/bot{TELEGRAM_TOKEN}", methods=["POST"])
 def webhook():
     data = request.json
 
@@ -152,3 +152,4 @@ def webhook():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000)
+
