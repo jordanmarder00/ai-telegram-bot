@@ -6,7 +6,7 @@ from openai import OpenAI, RateLimitError
 app = Flask(__name__)
 
 # ========================
-# API KEYS
+# ENV VARIABLES
 # ========================
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -20,6 +20,7 @@ BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 # Prevent duplicate summaries
 processed_urls = set()
 
+
 # ========================
 # SEND TELEGRAM MESSAGE
 # ========================
@@ -28,7 +29,6 @@ def send_message(chat_id, text, buttons=None):
     payload = {
         "chat_id": chat_id,
         "text": text,
-        "parse_mode": "Markdown"
     }
 
     if buttons:
@@ -36,7 +36,8 @@ def send_message(chat_id, text, buttons=None):
             "inline_keyboard": buttons
         }
 
-    requests.post(f"{BASE_URL}/sendMessage", json=payload)
+    response = requests.post(f"{BASE_URL}/sendMessage", json=payload)
+    print("Telegram response:", response.text)
 
 
 # ========================
@@ -44,7 +45,6 @@ def send_message(chat_id, text, buttons=None):
 # ========================
 
 def summarize_article(url):
-
     if url in processed_urls:
         return "Already summarized."
 
@@ -62,11 +62,11 @@ def summarize_article(url):
         return summary
 
     except RateLimitError:
-        return "⚠️ OpenAI quota exceeded. Please check billing."
+        return "⚠️ OpenAI quota exceeded."
 
     except Exception as e:
         print("OpenAI error:", e)
-        return "⚠️ Summary temporarily unavailable."
+        return "⚠️ Summary unavailable."
 
 
 # ========================
@@ -74,50 +74,55 @@ def summarize_article(url):
 # ========================
 
 def get_stock_info(symbol):
+    try:
+        url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={FINNHUB_API_KEY}"
+        response = requests.get(url)
+        data = response.json()
 
-    url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={FINNHUB_API_KEY}"
-    response = requests.get(url)
-    data = response.json()
+        if "c" not in data:
+            return "Stock data unavailable."
 
-    if "c" not in data:
-        return "Stock data unavailable."
+        return (
+            f"📈 {symbol} Stock Info\n\n"
+            f"Current: ${data['c']}\n"
+            f"High: ${data['h']}\n"
+            f"Low: ${data['l']}\n"
+            f"Previous Close: ${data['pc']}"
+        )
 
-    price = data["c"]
-    high = data["h"]
-    low = data["l"]
-    prev_close = data["pc"]
-
-    return f"""
-📈 *{symbol} Stock Info*
-
-Current: ${price}
-High: ${high}
-Low: ${low}
-Previous Close: ${prev_close}
-"""
+    except Exception as e:
+        print("Finnhub error:", e)
+        return "⚠️ Stock info unavailable."
 
 
 # ========================
-# HANDLE TELEGRAM WEBHOOK
+# TELEGRAM WEBHOOK
 # ========================
 
 @app.route(f"/bot{TELEGRAM_TOKEN}", methods=["POST"])
 def webhook():
     data = request.json
+    print("Incoming update:", data)
 
-    # BUTTON PRESSED
+    # BUTTON CLICKED
     if "callback_query" in data:
         callback = data["callback_query"]
         chat_id = callback["message"]["chat"]["id"]
-        data_value = callback["data"]
+        callback_data = callback["data"]
 
-        if data_value.startswith("summarize_"):
-            url = data_value.replace("summarize_", "")
+        # Stop Telegram loading spinner
+        requests.post(
+            f"{BASE_URL}/answerCallbackQuery",
+            json={"callback_query_id": callback["id"]}
+        )
+
+        if callback_data.startswith("summarize_"):
+            url = callback_data.replace("summarize_", "")
             summary = summarize_article(url)
             send_message(chat_id, summary)
 
-        elif data_value.startswith("stock_"):
-            symbol = data_value.replace("stock_", "")
+        elif callback_data.startswith("stock_"):
+            symbol = callback_data.replace("stock_", "")
             stock_info = get_stock_info(symbol)
             send_message(chat_id, stock_info)
 
@@ -128,17 +133,23 @@ def webhook():
         chat_id = data["message"]["chat"]["id"]
         text = data["message"].get("text", "")
 
-        if text.lower() == "/start":
+        if text == "/start":
             send_message(chat_id, "🤖 AI & Robotics News Bot Activated.")
 
-        if text.lower() == "/test":
+        elif text == "/test":
             send_message(
                 chat_id,
-                "Test Article: AI breakthrough in robotics.",
+                "📰 Test Article: AI breakthrough in robotics.\nhttps://example.com",
                 buttons=[
                     [
-                        {"text": "🧠 Summarize", "callback_data": "summarize_https://example.com"},
-                        {"text": "📈 Stock Info", "callback_data": "stock_TSLA"}
+                        {
+                            "text": "🧠 Summarize",
+                            "callback_data": "summarize_https://example.com"
+                        },
+                        {
+                            "text": "📈 Stock Info",
+                            "callback_data": "stock_TSLA"
+                        }
                     ]
                 ]
             )
@@ -152,4 +163,3 @@ def webhook():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000)
-
