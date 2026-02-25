@@ -9,6 +9,10 @@ from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 
+@app.route("/", methods=["GET"])
+def health():
+    return "SERVER WORKING", 200
+
 # =========================
 # ENV VARIABLES
 # =========================
@@ -286,3 +290,4 @@ def webhook():
 # =========================
 # RUN SERVER
 # =========================
+
