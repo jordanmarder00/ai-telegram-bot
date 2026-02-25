@@ -1,7 +1,6 @@
 import os
 import requests
 from flask import Flask, request
-from openai import OpenAI, RateLimitError
 
 app = Flask(__name__)
 
@@ -10,17 +9,9 @@ app = Flask(__name__)
 # ========================
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 
-print("BOT TOKEN LOADED:", TELEGRAM_TOKEN is not None)
-
-client = OpenAI(api_key=OPENAI_API_KEY)
-
 BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
-
-processed_urls = set()
 
 # ========================
 # SEND MESSAGE
@@ -38,11 +29,34 @@ def send_message(chat_id, text, buttons=None):
             "inline_keyboard": buttons
         }
 
-    try:
-        r = requests.post(f"{BASE_URL}/sendMessage", json=payload)
-        print("SEND MESSAGE RESPONSE:", r.status_code, r.text)
-    except Exception as e:
-        print("SEND MESSAGE ERROR:", e)
+    r = requests.post(f"{BASE_URL}/sendMessage", json=payload)
+    print("SEND:", r.status_code, r.text)
+
+
+# ========================
+# GET AI NEWS
+# ========================
+
+def get_ai_news():
+    url = (
+        f"https://newsapi.org/v2/everything?"
+        f"q=AI OR robotics OR humanoid robot OR artificial intelligence "
+        f"OR China AI&"
+        f"sortBy=publishedAt&language=en&pageSize=5&"
+        f"apiKey={NEWS_API_KEY}"
+    )
+
+    r = requests.get(url)
+    data = r.json()
+
+    articles = []
+
+    for article in data.get("articles", [])[:5]:
+        title = article["title"]
+        link = article["url"]
+        articles.append((title, link))
+
+    return articles
 
 
 # ========================
@@ -52,9 +66,8 @@ def send_message(chat_id, text, buttons=None):
 @app.route(f"/bot{TELEGRAM_TOKEN}", methods=["POST"])
 def webhook():
     print("WEBHOOK HIT")
-
     data = request.json
-    print("INCOMING DATA:", data)
+    print("DATA:", data)
 
     if not data:
         return {"ok": True}
@@ -65,14 +78,14 @@ def webhook():
         chat_id = callback["message"]["chat"]["id"]
         callback_data = callback["data"]
 
-        print("BUTTON CLICKED:", callback_data)
-
         requests.post(
             f"{BASE_URL}/answerCallbackQuery",
             json={"callback_query_id": callback["id"]}
         )
 
-        send_message(chat_id, f"You clicked: {callback_data}")
+        if callback_data.startswith("summarize_"):
+            send_message(chat_id, "🧠 Summary feature coming next...")
+
         return {"ok": True}
 
     # NORMAL MESSAGE
@@ -80,34 +93,35 @@ def webhook():
         chat_id = data["message"]["chat"]["id"]
         text = data["message"].get("text", "")
 
-        print("MESSAGE RECEIVED:", text)
-
         if text == "/start":
-            send_message(chat_id, "Bot is alive ✅")
+            send_message(chat_id, "🤖 AI & Robotics News Bot Active.")
 
-        elif text == "/test":
-            send_message(
-                chat_id,
-                "Test working.",
-                buttons=[
-                    [
-                        {
-                            "text": "Click Me",
-                            "callback_data": "test_button"
-                        }
+        elif text == "/news":
+            articles = get_ai_news()
+
+            if not articles:
+                send_message(chat_id, "No news found.")
+                return {"ok": True}
+
+            for title, link in articles:
+                send_message(
+                    chat_id,
+                    f"📰 {title}\n{link}",
+                    buttons=[
+                        [
+                            {
+                                "text": "🧠 Summarize",
+                                "callback_data": f"summarize_{link}"
+                            }
+                        ]
                     ]
-                ]
-            )
+                )
 
         else:
-            send_message(chat_id, f"You said: {text}")
+            send_message(chat_id, "Use /news to get AI & robotics updates.")
 
     return {"ok": True}
 
-
-# ========================
-# RUN SERVER
-# ========================
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000)
