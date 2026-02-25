@@ -152,7 +152,10 @@ def get_stock_info(symbol):
 # ========================
 
 def get_ai_news():
-    rss_url = "https://news.google.com/rss/search?q=AI+robotics+China+humanoid+robots&hl=en-US&gl=US&ceid=US:en"
+    timestamp = int(time.time())
+
+    rss_url = f"https://news.google.com/rss/search?q=AI+robotics+China+humanoid+robots+{timestamp}&hl=en-US&gl=US&ceid=US:en"
+
     feed = feedparser.parse(rss_url)
 
     articles = []
@@ -264,3 +267,4 @@ def webhook():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000)
+
