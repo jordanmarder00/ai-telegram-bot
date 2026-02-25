@@ -1,5 +1,6 @@
 flask
 requests
-openai
 feedparser
+openai
 beautifulsoup4
+gunicorn
