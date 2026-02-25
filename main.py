@@ -9,6 +9,7 @@ app = Flask(__name__)
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+FINNHUB_KEY = os.getenv("FINNHUB_KEY")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -43,25 +44,36 @@ def send_message(chat_id, text, buttons=None):
 def fetch_article_text(url):
     try:
         r = requests.get(url, timeout=10)
-        return r.text[:8000]  # limit size for cost control
+        return r.text[:8000]
     except:
         return None
 
 
 # ========================
-# SUMMARIZE WITH OPENAI
+# OPENAI SUMMARY + COMPANY DETECTION
 # ========================
 
-def summarize_article(url):
+def summarize_and_detect(url):
     article_text = fetch_article_text(url)
-
     if not article_text:
-        return "Could not retrieve article content."
+        return "Could not retrieve article content.", []
 
     prompt = f"""
-Summarize the following news article in 5 concise bullet points.
-Focus on business impact, AI relevance, robotics developments,
-Chinese company involvement if any, and major breakthroughs.
+Summarize this article in 5 concise bullet points.
+
+Then list any publicly traded companies mentioned
+with their stock ticker symbols.
+
+Format exactly like this:
+
+SUMMARY:
+- bullet
+- bullet
+- bullet
+
+COMPANIES:
+TICKER1
+TICKER2
 
 Article:
 {article_text}
@@ -74,11 +86,49 @@ Article:
             temperature=0.3
         )
 
-        return response.choices[0].message.content
+        output = response.choices[0].message.content
+
+        if "COMPANIES:" in output:
+            summary_part, companies_part = output.split("COMPANIES:")
+            tickers = [
+                line.strip()
+                for line in companies_part.strip().split("\n")
+                if line.strip()
+            ]
+        else:
+            summary_part = output
+            tickers = []
+
+        return summary_part.strip(), tickers
 
     except Exception as e:
         print("OPENAI ERROR:", e)
-        return "⚠️ Summary unavailable."
+        return "⚠️ Summary unavailable.", []
+
+
+# ========================
+# STOCK INFO
+# ========================
+
+def get_stock_info(symbol):
+    try:
+        url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={FINNHUB_KEY}"
+        r = requests.get(url)
+        data = r.json()
+
+        if "c" not in data:
+            return "Stock data unavailable."
+
+        return (
+            f"📈 {symbol}\n"
+            f"Current: ${data['c']}\n"
+            f"High: ${data['h']}\n"
+            f"Low: ${data['l']}\n"
+            f"Prev Close: ${data['pc']}"
+        )
+
+    except:
+        return "⚠️ Stock info unavailable."
 
 
 # ========================
@@ -114,22 +164,40 @@ def webhook():
         chat_id = callback["message"]["chat"]["id"]
         callback_data = callback["data"]
 
-        # stop loading spinner
         requests.post(
             f"{BASE_URL}/answerCallbackQuery",
             json={"callback_query_id": callback["id"]}
         )
 
+        # SUMMARY BUTTON
         if callback_data.startswith("summarize_"):
             article_id = int(callback_data.split("_")[1])
             link = latest_articles.get(article_id)
 
             if link:
                 send_message(chat_id, "🧠 Generating summary...")
-                summary = summarize_article(link)
-                send_message(chat_id, summary)
+                summary, tickers = summarize_and_detect(link)
+
+                buttons = []
+
+                if tickers:
+                    stock_buttons = []
+                    for ticker in tickers[:3]:  # limit to 3
+                        stock_buttons.append({
+                            "text": f"📈 {ticker}",
+                            "callback_data": f"stock_{ticker}"
+                        })
+                    buttons.append(stock_buttons)
+
+                send_message(chat_id, summary, buttons)
             else:
                 send_message(chat_id, "Article not found.")
+
+        # STOCK BUTTON
+        elif callback_data.startswith("stock_"):
+            ticker = callback_data.split("_")[1]
+            stock_info = get_stock_info(ticker)
+            send_message(chat_id, stock_info)
 
         return {"ok": True}
 
@@ -139,17 +207,12 @@ def webhook():
         text = data["message"].get("text", "")
 
         if text == "/start":
-            send_message(chat_id, "🤖 AI & Robotics News Bot Active.")
+            send_message(chat_id, "🤖 AI & Robotics Investment Bot Active.")
 
         elif text == "/news":
-            send_message(chat_id, "Fetching latest AI & robotics news...")
+            send_message(chat_id, "Fetching AI & robotics news...")
 
             articles = get_ai_news()
-
-            if not articles:
-                send_message(chat_id, "No articles found.")
-                return {"ok": True}
-
             latest_articles.clear()
 
             for i, (title, link) in enumerate(articles):
