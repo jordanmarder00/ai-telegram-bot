@@ -9,9 +9,21 @@ from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 
+# =========================
+# ENV VARIABLES
+# =========================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 FINNHUB_KEY = os.getenv("FINNHUB_KEY")
+
+if not TELEGRAM_TOKEN:
+    raise ValueError("TELEGRAM_TOKEN not set")
+
+if not OPENAI_API_KEY:
+    raise ValueError("OPENAI_API_KEY not set")
+
+if not FINNHUB_KEY:
+    raise ValueError("FINNHUB_KEY not set")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -23,19 +35,23 @@ latest_articles = {}
 # SEND MESSAGE
 # =========================
 def send_message(chat_id, text, buttons=None):
-    payload = {
-        "chat_id": chat_id,
-        "text": text,
-        "disable_web_page_preview": False
-    }
-
-    if buttons:
-        payload["reply_markup"] = {
-            "inline_keyboard": buttons
+    try:
+        payload = {
+            "chat_id": chat_id,
+            "text": text,
+            "disable_web_page_preview": False
         }
 
-    r = requests.post(f"{BASE_URL}/sendMessage", json=payload)
-    print("TELEGRAM:", r.status_code, r.text)
+        if buttons:
+            payload["reply_markup"] = {
+                "inline_keyboard": buttons
+            }
+
+        r = requests.post(f"{BASE_URL}/sendMessage", json=payload, timeout=10)
+        print("TELEGRAM RESPONSE:", r.status_code)
+
+    except Exception as e:
+        print("SEND MESSAGE ERROR:", e)
 
 
 # =========================
@@ -124,7 +140,7 @@ Article:
 def get_stock_info(symbol):
     try:
         url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={FINNHUB_KEY}"
-        r = requests.get(url)
+        r = requests.get(url, timeout=10)
         data = r.json()
 
         if not data or "c" not in data:
@@ -147,18 +163,27 @@ def get_stock_info(symbol):
 # GET AI NEWS
 # =========================
 def get_ai_news():
-    rss_url = "https://news.google.com/rss/search?q=AI+robotics+China+humanoid+robots&hl=en-US&gl=US&ceid=US:en"
+    try:
+        rss_url = "https://news.google.com/rss/search?q=AI+robotics+China+humanoid+robots&hl=en-US&gl=US&ceid=US:en"
 
-    feed = feedparser.parse(rss_url)
+        feed = feedparser.parse(rss_url)
 
-    articles = []
+        articles = []
 
-    for entry in feed.entries:
-        articles.append((entry.title, entry.link))
+        for entry in feed.entries:
+            articles.append((entry.title, entry.link))
 
-    random.shuffle(articles)
+        if not articles:
+            print("No articles found in RSS feed.")
+            return []
 
-    return articles[:7]
+        random.shuffle(articles)
+
+        return articles[:7]
+
+    except Exception as e:
+        print("RSS ERROR:", e)
+        return []
 
 
 # =========================
@@ -166,90 +191,100 @@ def get_ai_news():
 # =========================
 @app.route(f"/bot{TELEGRAM_TOKEN}", methods=["POST"])
 def webhook():
-    data = request.json
+    try:
+        data = request.json
 
-    if not data:
-        return {"ok": True}
+        if not data:
+            return {"ok": True}
 
-    # -------------------------
-    # BUTTON CLICK HANDLER
-    # -------------------------
-    if "callback_query" in data:
-        callback = data["callback_query"]
-        chat_id = callback["message"]["chat"]["id"]
-        callback_data = callback["data"]
+        # -------------------------
+        # BUTTON CLICK
+        # -------------------------
+        if "callback_query" in data:
+            callback = data["callback_query"]
+            chat_id = callback["message"]["chat"]["id"]
+            callback_data = callback["data"]
 
-        requests.post(
-            f"{BASE_URL}/answerCallbackQuery",
-            json={"callback_query_id": callback["id"]}
-        )
-
-        # SUMMARY BUTTON
-        if callback_data.startswith("summarize_"):
-            article_id = int(callback_data.split("_")[1])
-            link = latest_articles.get(article_id)
-
-            if link:
-                send_message(chat_id, "🧠 Generating summary...")
-                summary, tickers = summarize_and_detect(link)
-
-                buttons = []
-                if tickers:
-                    row = []
-                    for ticker in tickers:
-                        row.append({
-                            "text": f"📈 {ticker}",
-                            "callback_data": f"stock_{ticker}"
-                        })
-                    buttons.append(row)
-
-                send_message(chat_id, summary, buttons)
-            else:
-                send_message(chat_id, "Article not found.")
-
-        # STOCK BUTTON
-        elif callback_data.startswith("stock_"):
-            ticker = callback_data.split("_")[1]
-            stock_info = get_stock_info(ticker)
-            send_message(chat_id, stock_info)
-
-        return {"ok": True}
-
-    # -------------------------
-    # MESSAGE HANDLER
-    # -------------------------
-    if "message" in data:
-        chat_id = data["message"]["chat"]["id"]
-        text = data["message"].get("text", "")
-
-        if text == "/start":
-            send_message(
-                chat_id,
-                "🤖 AI Investment Bot Active.\n\nCommands:\n/news\n/refresh"
+            requests.post(
+                f"{BASE_URL}/answerCallbackQuery",
+                json={"callback_query_id": callback["id"]}
             )
 
-        elif text == "/news" or text == "/refresh":
-            send_message(chat_id, "Fetching AI & robotics news...")
+            if callback_data.startswith("summarize_"):
+                article_id = int(callback_data.split("_")[1])
+                link = latest_articles.get(article_id)
 
-            latest_articles.clear()
-            articles = get_ai_news()
+                if link:
+                    send_message(chat_id, "🧠 Generating summary...")
+                    summary, tickers = summarize_and_detect(link)
 
-            if not articles:
-                send_message(chat_id, "⚠️ No news articles found.")
-                return {"ok": True}
+                    buttons = []
+                    if tickers:
+                        row = []
+                        for ticker in tickers:
+                            row.append({
+                                "text": f"📈 {ticker}",
+                                "callback_data": f"stock_{ticker}"
+                            })
+                        buttons.append(row)
 
-            for i, (title, link) in enumerate(articles):
-                latest_articles[i] = link
+                    send_message(chat_id, summary, buttons)
+                else:
+                    send_message(chat_id, "Article not found.")
 
+            elif callback_data.startswith("stock_"):
+                ticker = callback_data.split("_")[1]
+                stock_info = get_stock_info(ticker)
+                send_message(chat_id, stock_info)
+
+            return {"ok": True}
+
+        # -------------------------
+        # MESSAGE HANDLER
+        # -------------------------
+        if "message" in data:
+            chat_id = data["message"]["chat"]["id"]
+            text = data["message"].get("text", "")
+
+            if text == "/start":
                 send_message(
                     chat_id,
-                    f"📰 {title}\n{link}",
-                    buttons=[[{
-                        "text": "🧠 Summarize",
-                        "callback_data": f"summarize_{i}"
-                    }]]
+                    "🤖 AI Investment Bot Active.\n\nCommands:\n/news\n/refresh"
                 )
 
-                time.sleep(0.5)
+            elif text in ["/news", "/refresh"]:
+                send_message(chat_id, "Fetching AI & robotics news...")
 
-    return {"ok": True}
+                latest_articles.clear()
+                articles = get_ai_news()
+
+                if not articles:
+                    send_message(chat_id, "⚠️ No news articles found.")
+                    return {"ok": True}
+
+                for i, (title, link) in enumerate(articles):
+                    latest_articles[i] = link
+
+                    send_message(
+                        chat_id,
+                        f"📰 {title}\n{link}",
+                        buttons=[[{
+                            "text": "🧠 Summarize",
+                            "callback_data": f"summarize_{i}"
+                        }]]
+                    )
+
+                    time.sleep(0.5)
+
+        return {"ok": True}
+
+    except Exception as e:
+        print("WEBHOOK ERROR:", e)
+        return {"ok": True}
+
+
+# =========================
+# RUN SERVER
+# =========================
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8000)
