@@ -14,6 +14,8 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 
+print("BOT TOKEN LOADED:", TELEGRAM_TOKEN is not None)
+
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
@@ -21,7 +23,7 @@ BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 processed_urls = set()
 
 # ========================
-# SEND TELEGRAM MESSAGE
+# SEND MESSAGE
 # ========================
 
 def send_message(chat_id, text, buttons=None):
@@ -36,122 +38,41 @@ def send_message(chat_id, text, buttons=None):
             "inline_keyboard": buttons
         }
 
-    response = requests.post(f"{BASE_URL}/sendMessage", json=payload)
-    print("Telegram response:", response.text)
-
-
-# ========================
-# GET AI NEWS
-# ========================
-
-def get_ai_news():
-    url = (
-        f"https://newsapi.org/v2/everything?"
-        f"q=AI OR robotics OR humanoid robot OR artificial intelligence "
-        f"OR China AI OR autonomous systems&"
-        f"sortBy=publishedAt&language=en&pageSize=5&"
-        f"apiKey={NEWS_API_KEY}"
-    )
-
-    response = requests.get(url)
-    data = response.json()
-
-    articles = []
-
-    for article in data.get("articles", [])[:5]:
-        title = article["title"]
-        link = article["url"]
-        articles.append((title, link))
-
-    return articles
-
-
-# ========================
-# SUMMARIZE ARTICLE
-# ========================
-
-def summarize_article(url):
-    if url in processed_urls:
-        return "Already summarized."
-
-    prompt = f"Summarize this article in 5 concise bullet points:\n{url}"
-
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}]
-        )
-
-        summary = response.choices[0].message.content
-        processed_urls.add(url)
-
-        return summary
-
-    except RateLimitError:
-        return "⚠️ OpenAI quota exceeded."
-
+        r = requests.post(f"{BASE_URL}/sendMessage", json=payload)
+        print("SEND MESSAGE RESPONSE:", r.status_code, r.text)
     except Exception as e:
-        print("OpenAI error:", e)
-        return "⚠️ Summary unavailable."
+        print("SEND MESSAGE ERROR:", e)
 
 
 # ========================
-# GET STOCK INFO
-# ========================
-
-def get_stock_info(symbol):
-    try:
-        url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={FINNHUB_API_KEY}"
-        response = requests.get(url)
-        data = response.json()
-
-        if "c" not in data:
-            return "Stock data unavailable."
-
-        return (
-            f"📈 {symbol} Stock Info\n\n"
-            f"Current: ${data['c']}\n"
-            f"High: ${data['h']}\n"
-            f"Low: ${data['l']}\n"
-            f"Previous Close: ${data['pc']}"
-        )
-
-    except Exception as e:
-        print("Finnhub error:", e)
-        return "⚠️ Stock info unavailable."
-
-
-# ========================
-# TELEGRAM WEBHOOK
+# WEBHOOK
 # ========================
 
 @app.route(f"/bot{TELEGRAM_TOKEN}", methods=["POST"])
 def webhook():
-    data = request.json
-    print("Incoming update:", data)
+    print("WEBHOOK HIT")
 
-    # BUTTON CLICKED
+    data = request.json
+    print("INCOMING DATA:", data)
+
+    if not data:
+        return {"ok": True}
+
+    # BUTTON CLICK
     if "callback_query" in data:
         callback = data["callback_query"]
         chat_id = callback["message"]["chat"]["id"]
         callback_data = callback["data"]
 
-        # Stop loading spinner
+        print("BUTTON CLICKED:", callback_data)
+
         requests.post(
             f"{BASE_URL}/answerCallbackQuery",
             json={"callback_query_id": callback["id"]}
         )
 
-        if callback_data.startswith("summarize_"):
-            url = callback_data.replace("summarize_", "")
-            summary = summarize_article(url)
-            send_message(chat_id, summary)
-
-        elif callback_data.startswith("stock_"):
-            symbol = callback_data.replace("stock_", "")
-            stock_info = get_stock_info(symbol)
-            send_message(chat_id, stock_info)
-
+        send_message(chat_id, f"You clicked: {callback_data}")
         return {"ok": True}
 
     # NORMAL MESSAGE
@@ -159,43 +80,27 @@ def webhook():
         chat_id = data["message"]["chat"]["id"]
         text = data["message"].get("text", "")
 
+        print("MESSAGE RECEIVED:", text)
+
         if text == "/start":
-            send_message(chat_id, "🤖 AI & Robotics News Bot Activated.")
+            send_message(chat_id, "Bot is alive ✅")
 
         elif text == "/test":
             send_message(
                 chat_id,
-                "📰 Test Article: AI breakthrough in robotics.\nhttps://example.com",
+                "Test working.",
                 buttons=[
                     [
                         {
-                            "text": "🧠 Summarize",
-                            "callback_data": "summarize_https://example.com"
-                        },
-                        {
-                            "text": "📈 Stock Info",
-                            "callback_data": "stock_TSLA"
+                            "text": "Click Me",
+                            "callback_data": "test_button"
                         }
                     ]
                 ]
             )
 
-        elif text == "/news":
-            articles = get_ai_news()
-
-            for title, link in articles:
-                send_message(
-                    chat_id,
-                    f"📰 {title}\n{link}",
-                    buttons=[
-                        [
-                            {
-                                "text": "🧠 Summarize",
-                                "callback_data": f"summarize_{link}"
-                            }
-                        ]
-                    ]
-                )
+        else:
+            send_message(chat_id, f"You said: {text}")
 
     return {"ok": True}
 
