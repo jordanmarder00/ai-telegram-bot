@@ -12,14 +12,13 @@ app = Flask(__name__)
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
+NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-# Prevent duplicate summaries
 processed_urls = set()
-
 
 # ========================
 # SEND TELEGRAM MESSAGE
@@ -29,6 +28,7 @@ def send_message(chat_id, text, buttons=None):
     payload = {
         "chat_id": chat_id,
         "text": text,
+        "disable_web_page_preview": False
     }
 
     if buttons:
@@ -38,6 +38,32 @@ def send_message(chat_id, text, buttons=None):
 
     response = requests.post(f"{BASE_URL}/sendMessage", json=payload)
     print("Telegram response:", response.text)
+
+
+# ========================
+# GET AI NEWS
+# ========================
+
+def get_ai_news():
+    url = (
+        f"https://newsapi.org/v2/everything?"
+        f"q=AI OR robotics OR humanoid robot OR artificial intelligence "
+        f"OR China AI OR autonomous systems&"
+        f"sortBy=publishedAt&language=en&pageSize=5&"
+        f"apiKey={NEWS_API_KEY}"
+    )
+
+    response = requests.get(url)
+    data = response.json()
+
+    articles = []
+
+    for article in data.get("articles", [])[:5]:
+        title = article["title"]
+        link = article["url"]
+        articles.append((title, link))
+
+    return articles
 
 
 # ========================
@@ -110,7 +136,7 @@ def webhook():
         chat_id = callback["message"]["chat"]["id"]
         callback_data = callback["data"]
 
-        # Stop Telegram loading spinner
+        # Stop loading spinner
         requests.post(
             f"{BASE_URL}/answerCallbackQuery",
             json={"callback_query_id": callback["id"]}
@@ -153,6 +179,23 @@ def webhook():
                     ]
                 ]
             )
+
+        elif text == "/news":
+            articles = get_ai_news()
+
+            for title, link in articles:
+                send_message(
+                    chat_id,
+                    f"📰 {title}\n{link}",
+                    buttons=[
+                        [
+                            {
+                                "text": "🧠 Summarize",
+                                "callback_data": f"summarize_{link}"
+                            }
+                        ]
+                    ]
+                )
 
     return {"ok": True}
 
