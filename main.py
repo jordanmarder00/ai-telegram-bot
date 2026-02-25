@@ -13,6 +13,8 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
+last_update_id = None
+
 def send_article(title, url):
     keyboard = {
         "inline_keyboard": [
@@ -32,7 +34,7 @@ def send_article(title, url):
     requests.post(f"{BASE_URL}/sendMessage", json=payload)
 
 def summarize_article(url):
-    prompt = f"Summarize this news article in 5 bullet points for an investor:\n{url}"
+    prompt = f"Summarize this article for an investor in 5 bullet points:\n{url}"
 
     response = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -41,8 +43,7 @@ def summarize_article(url):
 
     return response.choices[0].message.content
 
-def get_stock_info(company_name):
-    # simple example mapping (can improve later)
+def get_stock_info(title):
     mapping = {
         "NVIDIA": "NVDA",
         "Tesla": "TSLA",
@@ -53,23 +54,37 @@ def get_stock_info(company_name):
     }
 
     for name in mapping:
-        if name.lower() in company_name.lower():
+        if name.lower() in title.lower():
             symbol = mapping[name]
             data = requests.get(
                 f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={FINNHUB_KEY}"
             ).json()
 
-            return f"{symbol}\nPrice: {data['c']}\nChange: {data['dp']}%"
+            return f"{symbol}\nPrice: {data.get('c')}\nChange: {data.get('dp')}%"
 
     return "No stock data found."
 
-def check_callbacks():
-    updates = requests.get(f"{BASE_URL}/getUpdates").json()
+def check_updates():
+    global last_update_id
 
-    for update in updates.get("result", []):
+    params = {"timeout": 10}
+    if last_update_id:
+        params["offset"] = last_update_id + 1
+
+    response = requests.get(f"{BASE_URL}/getUpdates", params=params).json()
+
+    for update in response.get("result", []):
+        last_update_id = update["update_id"]
+
         if "callback_query" in update:
-            data = update["callback_query"]["data"]
-            chat_id = update["callback_query"]["message"]["chat"]["id"]
+            callback = update["callback_query"]
+            callback_id = callback["id"]
+            data = callback["data"]
+            chat_id = callback["message"]["chat"]["id"]
+
+            # VERY IMPORTANT: answer callback to stop loading spinner
+            requests.post(f"{BASE_URL}/answerCallbackQuery",
+                          json={"callback_query_id": callback_id})
 
             if data.startswith("summary|"):
                 url = data.split("|")[1]
@@ -91,7 +106,7 @@ def get_ai_news():
         "q": query,
         "language": "en",
         "sortBy": "publishedAt",
-        "pageSize": 3,
+        "pageSize": 2,
         "apiKey": NEWSAPI_KEY
     }
 
@@ -105,5 +120,5 @@ send_article("🚀 AI Robotics Intelligence Bot Running", "")
 
 while True:
     get_ai_news()
-    check_callbacks()
-    time.sleep(300)
+    check_updates()
+    time.sleep(60)
