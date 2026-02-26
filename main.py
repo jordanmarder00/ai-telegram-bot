@@ -1,183 +1,113 @@
 import os
 import requests
-import feedparser
-import random
 from flask import Flask, request
-from bs4 import BeautifulSoup
-from openai import OpenAI
+from openai import OpenAI, RateLimitError
 
 app = Flask(__name__)
 
-# Environment variables
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-FINNHUB_KEY = os.environ.get("FINNHUB_KEY")
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+# ========================
+# ENV VARIABLES
+# ========================
 
-TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
+NEWS_API_KEY = os.getenv("NEWS_API_KEY")
+
+print("BOT TOKEN LOADED:", TELEGRAM_TOKEN is not None)
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
+BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-# -----------------------
-# Telegram Send Message
-# -----------------------
-def send_message(chat_id, text):
-    url = f"{TELEGRAM_API_URL}/sendMessage"
+processed_urls = set()
+
+# ========================
+# SEND MESSAGE
+# ========================
+
+def send_message(chat_id, text, buttons=None):
     payload = {
         "chat_id": chat_id,
-        "text": text
+        "text": text,
+        "disable_web_page_preview": False
     }
-    requests.post(url, json=payload)
 
+    if buttons:
+        payload["reply_markup"] = {
+            "inline_keyboard": buttons
+        }
 
-# -----------------------
-# Fetch AI News
-# -----------------------
-def get_ai_news():
-    rss_url = "https://news.google.com/rss/search?q=AI+robotics+China+humanoid+robots&hl=en-US&gl=US&ceid=US:en"
-    feed = feedparser.parse(rss_url)
-
-    articles = []
-    for entry in feed.entries:
-        articles.append((entry.title, entry.link))
-
-    random.shuffle(articles)
-    return articles[:5]
-
-
-# -----------------------
-# Extract Article Text
-# -----------------------
-def extract_article_text(url):
     try:
-        response = requests.get(url, timeout=5)
-        soup = BeautifulSoup(response.text, "html.parser")
-        paragraphs = soup.find_all("p")
-        text = " ".join([p.get_text() for p in paragraphs])
-        return text[:4000]  # limit for token safety
-    except:
-        return None
-
-
-# -----------------------
-# Summarize with OpenAI
-# -----------------------
-def summarize_text(text):
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "Summarize the article clearly and briefly. Mention key companies if relevant."},
-                {"role": "user", "content": text}
-            ],
-            max_tokens=300
-        )
-        return response.choices[0].message.content
+        r = requests.post(f"{BASE_URL}/sendMessage", json=payload)
+        print("SEND MESSAGE RESPONSE:", r.status_code, r.text)
     except Exception as e:
-        return f"Summary failed: {str(e)}"
+        print("SEND MESSAGE ERROR:", e)
 
 
-# -----------------------
-# Stock Lookup
-# -----------------------
-def get_stock_price(symbol):
-    url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={FINNHUB_KEY}"
-    response = requests.get(url)
-    data = response.json()
+# ========================
+# WEBHOOK
+# ========================
 
-    if "c" not in data or data["c"] == 0:
-        return None
-
-    return data
-
-
-# -----------------------
-# Health Check
-# -----------------------
-@app.route("/", methods=["GET"])
-def health():
-    return "SERVER WORKING", 200
-
-
-# -----------------------
-# Telegram Webhook
-# -----------------------
 @app.route(f"/bot{TELEGRAM_TOKEN}", methods=["POST"])
-def telegram_webhook():
-    data = request.get_json()
+def webhook():
+    print("WEBHOOK HIT")
 
-    if not data or "message" not in data:
+    data = request.json
+    print("INCOMING DATA:", data)
+
+    if not data:
         return {"ok": True}
 
-    chat_id = data["message"]["chat"]["id"]
-    text = data["message"].get("text", "")
+    # BUTTON CLICK
+    if "callback_query" in data:
+        callback = data["callback_query"]
+        chat_id = callback["message"]["chat"]["id"]
+        callback_data = callback["data"]
 
-    # NEWS
-    if text == "/news" or text == "/refresh":
-        send_message(chat_id, "Fetching AI news...")
+        print("BUTTON CLICKED:", callback_data)
 
-        articles = get_ai_news()
-
-        if not articles:
-            send_message(chat_id, "No news found.")
-            return {"ok": True}
-
-        for title, link in articles:
-            send_message(chat_id, f"{title}\n{link}")
-
-    # SUMMARY
-    elif text.startswith("/summary"):
-        parts = text.split(maxsplit=1)
-
-        if len(parts) < 2:
-            send_message(chat_id, "Usage: /summary <article_url>")
-            return {"ok": True}
-
-        url = parts[1]
-
-        send_message(chat_id, "Extracting article...")
-
-        article_text = extract_article_text(url)
-
-        if not article_text:
-            send_message(chat_id, "Could not extract article text.")
-            return {"ok": True}
-
-        send_message(chat_id, "Generating summary...")
-
-        summary = summarize_text(article_text)
-
-        send_message(chat_id, summary)
-
-    # STOCK
-    elif text.startswith("/stock"):
-        parts = text.split()
-
-        if len(parts) < 2:
-            send_message(chat_id, "Usage: /stock AAPL")
-            return {"ok": True}
-
-        symbol = parts[1].upper()
-        stock = get_stock_price(symbol)
-
-        if not stock:
-            send_message(chat_id, f"Could not fetch data for {symbol}")
-            return {"ok": True}
-
-        message = (
-            f"{symbol} Stock:\n"
-            f"Current: ${stock['c']}\n"
-            f"High: ${stock['h']}\n"
-            f"Low: ${stock['l']}\n"
-            f"Open: ${stock['o']}\n"
-            f"Previous Close: ${stock['pc']}"
+        requests.post(
+            f"{BASE_URL}/answerCallbackQuery",
+            json={"callback_query_id": callback["id"]}
         )
 
-        send_message(chat_id, message)
+        send_message(chat_id, f"You clicked: {callback_data}")
+        return {"ok": True}
+
+    # NORMAL MESSAGE
+    if "message" in data:
+        chat_id = data["message"]["chat"]["id"]
+        text = data["message"].get("text", "")
+
+        print("MESSAGE RECEIVED:", text)
+
+        if text == "/start":
+            send_message(chat_id, "Bot is alive ✅")
+
+        elif text == "/test":
+            send_message(
+                chat_id,
+                "Test working.",
+                buttons=[
+                    [
+                        {
+                            "text": "Click Me",
+                            "callback_data": "test_button"
+                        }
+                    ]
+                ]
+            )
+
+        else:
+            send_message(chat_id, f"You said: {text}")
 
     return {"ok": True}
 
 
+# ========================
+# RUN SERVER
+# ========================
+
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=8000)
