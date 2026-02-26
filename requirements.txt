@@ -3,3 +3,4 @@ requests
 feedparser
 openai
 beautifulsoup4
+gunicorn
