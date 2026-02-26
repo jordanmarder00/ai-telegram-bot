@@ -3,13 +3,17 @@ import time
 import requests
 import feedparser
 from flask import Flask, request
+from openai import OpenAI
 
 app = Flask(__name__)
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+client = OpenAI(api_key=OPENAI_API_KEY)
+
 BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-# Store articles temporarily
 latest_articles = {}
 
 # ========================
@@ -33,7 +37,52 @@ def send_message(chat_id, text, buttons=None):
 
 
 # ========================
-# GET AI NEWS (GOOGLE RSS)
+# FETCH ARTICLE TEXT
+# ========================
+
+def fetch_article_text(url):
+    try:
+        r = requests.get(url, timeout=10)
+        return r.text[:8000]  # limit size for cost control
+    except:
+        return None
+
+
+# ========================
+# SUMMARIZE WITH OPENAI
+# ========================
+
+def summarize_article(url):
+    article_text = fetch_article_text(url)
+
+    if not article_text:
+        return "Could not retrieve article content."
+
+    prompt = f"""
+Summarize the following news article in 5 concise bullet points.
+Focus on business impact, AI relevance, robotics developments,
+Chinese company involvement if any, and major breakthroughs.
+
+Article:
+{article_text}
+"""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3
+        )
+
+        return response.choices[0].message.content
+
+    except Exception as e:
+        print("OPENAI ERROR:", e)
+        return "⚠️ Summary unavailable."
+
+
+# ========================
+# GET AI NEWS
 # ========================
 
 def get_ai_news():
@@ -55,7 +104,6 @@ def get_ai_news():
 @app.route(f"/bot{TELEGRAM_TOKEN}", methods=["POST"])
 def webhook():
     data = request.json
-    print("INCOMING:", data)
 
     if not data:
         return {"ok": True}
@@ -77,7 +125,9 @@ def webhook():
             link = latest_articles.get(article_id)
 
             if link:
-                send_message(chat_id, f"🧠 Summary feature coming soon.\n{link}")
+                send_message(chat_id, "🧠 Generating summary...")
+                summary = summarize_article(link)
+                send_message(chat_id, summary)
             else:
                 send_message(chat_id, "Article not found.")
 
