@@ -39,20 +39,16 @@ def send_message(chat_id, text, buttons=None):
 
 
 # ========================
-# CLEAN ARTICLE EXTRACTION
+# FETCH ARTICLE TEXT
 # ========================
 
 def fetch_article_text(url):
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0"
-        }
-
+        headers = {"User-Agent": "Mozilla/5.0"}
         r = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
 
         paragraphs = soup.find_all("p")
-
         article_text = " ".join([p.get_text() for p in paragraphs])
 
         if len(article_text) < 500:
@@ -75,7 +71,7 @@ def summarize_and_detect(url):
         return "⚠️ Could not extract readable article content.", []
 
     prompt = f"""
-Summarize this news article in 5 concise bullet points.
+Summarize this finance news article in 5 concise bullet points.
 
 Then list publicly traded companies mentioned,
 with their stock ticker symbols ONLY.
@@ -109,7 +105,7 @@ Article:
             tickers = [
                 line.strip()
                 for line in companies_part.strip().split("\n")
-                if line.strip() and line.strip().isupper()
+                if line.strip().isupper()
             ]
         else:
             summary_part = output
@@ -123,7 +119,7 @@ Article:
 
 
 # ========================
-# STOCK INFO
+# STOCK INFO (FINNHUB)
 # ========================
 
 def get_stock_info(symbol):
@@ -148,15 +144,36 @@ def get_stock_info(symbol):
 
 
 # ========================
-# GET AI NEWS
+# YAHOO FINANCE NEWS
 # ========================
 
-def get_ai_news():
-    rss_url = "https://news.google.com/rss/search?q=AI+robotics+China+humanoid+robots&hl=en-US&gl=US&ceid=US:en"
+def get_latest_news():
+    rss_url = "https://finance.yahoo.com/rss/topstories"
     feed = feedparser.parse(rss_url)
 
     articles = []
+    for entry in feed.entries[:7]:
+        articles.append((entry.title, entry.link))
 
+    return articles
+
+
+def get_trending_news():
+    rss_url = "https://finance.yahoo.com/rss"
+    feed = feedparser.parse(rss_url)
+
+    articles = []
+    for entry in feed.entries[:7]:
+        articles.append((entry.title, entry.link))
+
+    return articles
+
+
+def get_stock_news(symbol):
+    rss_url = f"https://finance.yahoo.com/rss/headline?s={symbol}"
+    feed = feedparser.parse(rss_url)
+
+    articles = []
     for entry in feed.entries[:7]:
         articles.append((entry.title, entry.link))
 
@@ -221,12 +238,18 @@ def webhook():
         text = data["message"].get("text", "")
 
         if text == "/start":
-            send_message(chat_id, "🤖 AI Investment Bot Active.\n\nCommands:\n/news\n/refresh")
+            send_message(chat_id,
+                "🤖 AI Investment Bot Active.\n\n"
+                "Commands:\n"
+                "/news\n"
+                "/trending\n"
+                "/stocknews TSLA\n"
+            )
 
         elif text == "/news":
-            send_message(chat_id, "Fetching AI & robotics news...")
+            send_message(chat_id, "📰 Fetching latest market news...")
             latest_articles.clear()
-            articles = get_ai_news()
+            articles = get_latest_news()
 
             for i, (title, link) in enumerate(articles):
                 latest_articles[i] = link
@@ -239,28 +262,59 @@ def webhook():
                         "callback_data": f"summarize_{i}"
                     }]]
                 )
-                time.sleep(0.5)
+                time.sleep(0.4)
 
-        elif text == "/refresh":
-            send_message(chat_id, "🔄 Refreshing news feed...")
+        elif text == "/trending":
+            send_message(chat_id, "🔥 Fetching trending market news...")
             latest_articles.clear()
-            articles = get_ai_news()
+            articles = get_trending_news()
 
             for i, (title, link) in enumerate(articles):
                 latest_articles[i] = link
 
                 send_message(
                     chat_id,
-                    f"📰 {title}\n{link}",
+                    f"🔥 {title}\n{link}",
                     buttons=[[{
                         "text": "🧠 Summarize",
                         "callback_data": f"summarize_{i}"
                     }]]
                 )
-                time.sleep(0.5)
+                time.sleep(0.4)
+
+        elif text.startswith("/stocknews"):
+            parts = text.split()
+
+            if len(parts) < 2:
+                send_message(chat_id, "Usage: /stocknews TSLA")
+                return {"ok": True}
+
+            symbol = parts[1].upper()
+
+            send_message(chat_id, f"📈 Fetching news for {symbol}...")
+            latest_articles.clear()
+            articles = get_stock_news(symbol)
+
+            if not articles:
+                send_message(chat_id, "No recent articles found.")
+                return {"ok": True}
+
+            for i, (title, link) in enumerate(articles):
+                latest_articles[i] = link
+
+                send_message(
+                    chat_id,
+                    f"📈 {title}\n{link}",
+                    buttons=[[{
+                        "text": "🧠 Summarize",
+                        "callback_data": f"summarize_{i}"
+                    }]]
+                )
+                time.sleep(0.4)
 
     return {"ok": True}
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8000)
+    port = int(os.environ.get("PORT", 8000))
+    app.run(host="0.0.0.0", port=port)
